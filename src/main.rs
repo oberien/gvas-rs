@@ -51,7 +51,7 @@ impl std::fmt::Display for PropertyType {
     }
 }
 
-trait GVASRead : Read {
+trait GVASRead {
     fn parse(&mut self) -> Result<()>;
     fn parse_internal(&mut self, depth: u8) -> Result<()>;
     fn parse_type(&mut self, t: PropertyType, read_len: bool, depth: u8) -> Result<()>;
@@ -66,6 +66,7 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
         println!("{}", try!(self.read_string()));
         println!("{}", try!(self.read_string()));
         let s = try!(self.read_string());
+        // CurrentCharacterSlot is only in the file, if it is non-zero
         if s == "CurrentCharacterSlot" {
             println!("{}", s);
             try!(self.parse_internal(0));
@@ -117,22 +118,30 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
                 }
                 println!("{}{{", std::iter::repeat(" ").take(depth as usize * 2).collect::<String>());
                 let start_pos = self.position();
-                while {
-                    // i have no idea what i'm doing
-                    let typ = try!(self.read_type());
-                    match typ {
-                        PropertyType::Dunno(ref s) if s == "None" => true,
-                        mut typ => {
-                            let mut name = "".to_string();
-                            if let PropertyType::Dunno(s) = typ {
-                                name = s;
-                                println!("{}name: {}", std::iter::repeat(" ").take(depth as usize * 2 + 2).collect::<String>(), name);
-                                typ = try!(self.read_type());
-                            }
-                            self.parse_type(typ, true, depth+2).is_ok() && (len == 0 || self.position() < start_pos + len) && name != "EntitlementsSeen"
+                loop {
+                    // Structs usually have <name> <type> <value>.
+                    // For some reason, <type> is not given for CharacterDNA and CharacterCustomization.
+                    // For these types we directly interpret them as type.
+                    // If there is <type> <value>, we will get a type and parse it,
+                    // otherwise we get <name> <type> <value> and parse it accordingly.
+                    // There is also the possibility to get "None", which leads to a continue.
+                    let mut typ = try!(self.read_type());
+                    let name;
+                    if let PropertyType::Dunno(s) = typ {
+                        if s == "None" {
+                            println!("NONE NONE NONE");
+                            continue;
                         }
+                        name = s;
+                        typ = try!(self.read_type());
+                    } else {
+                        name = typ.to_string();
                     }
-                } {}
+                    println!("{}name: {}", std::iter::repeat(" ").take(depth as usize * 2 + 2).collect::<String>(), name);
+                    if ! (self.parse_type(typ, true, depth+2).is_ok() && (len == 0 || self.position() < start_pos + len) && name != "EntitlementsSeen") {
+                        break;
+                    }
+                }
                 println!("{}}}", std::iter::repeat(" ").take(depth as usize * 2).collect::<String>());
                 Ok(())
             },
