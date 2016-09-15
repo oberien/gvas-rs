@@ -144,11 +144,13 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
                     res.push(try!(self.parse_type(typ.clone(), false, depth+1)));
                 }
                 custom_debug!(depth, "]");
-                // TODO: fix None-handling
-                // worst fix as they are using arrays with different types:
+                // Usually arrays are finished with `None`.
+                // For some reason the outer-most array does not end with `None`.
+                // Instead the next Struct-elements are continued.
+                // Therefore if we get a non-`None` value, we reset the cursor.
                 let pos = self.position();
-                let name = try!(self.read_string());
-                if name != "None" {
+                let none = try!(self.read_string());
+                if none != "None" {
                     self.set_position(pos);
                 }
                 Ok(ReturnType::Array(res))
