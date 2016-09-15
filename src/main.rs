@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::{Read, Cursor, Result as Result};
 use std::str::FromStr;
 
-use byteorder::{ReadBytesExt, WriteBytesExt, LittleEndian};
+use byteorder::{ReadBytesExt, LittleEndian};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PropertyType {
@@ -75,7 +75,6 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
             println!("Int: 0");
             println!("{}", s);
         }
-        try!(self.parse_internal(0));
         self.parse_internal(0)
     }
 
@@ -92,12 +91,19 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
                 let typ = try!(self.read_type());
                 let elements = try!(self.read_u32::<LittleEndian>());
                 println!("{}: {}, {}: {}", t, len, typ, elements);
-                println!("{}[", std::iter::repeat(" ").take(depth as usize*2+2).collect::<String>());
+                println!("{}[", std::iter::repeat(" ").take(depth as usize*2).collect::<String>());
                 for _ in 0..elements {
-                    try!(self.parse_type(typ.clone(), false, depth+2));
+                    try!(self.parse_type(typ.clone(), false, depth+1));
                 }
-                assert_eq!(try!(self.read_string()), "None");
-                println!("{}]", std::iter::repeat(" ").take(depth as usize*2+2).collect::<String>());
+                println!("{}]", std::iter::repeat(" ").take(depth as usize*2).collect::<String>());
+                // worst fix as they are using arrays with different types:
+                let mut name = try!(self.read_string());
+                while name != "None" {
+                    println!("{}{}", std::iter::repeat(" ").take(depth as usize*2).collect::<String>(), name);
+                    try!(self.parse_internal(depth));
+                    name = try!(self.read_string());
+                }
+                assert_eq!(name, "None");
                 Ok(())
             },
             PropertyType::Struct => {
@@ -109,17 +115,25 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
                     len = 0;
                     println!("{}", t);
                 }
+                println!("{}{{", std::iter::repeat(" ").take(depth as usize * 2).collect::<String>());
                 let start_pos = self.position();
                 while {
                     // i have no idea what i'm doing
-                    let mut typ = try!(self.read_type());
-                    if let PropertyType::Dunno(s) = typ {
-                        let name = s;
-                        println!("{}name: {}", std::iter::repeat(" ").take(depth as usize * 2 + 2).collect::<String>(), name);
-                        typ = try!(self.read_type());
+                    let typ = try!(self.read_type());
+                    match typ {
+                        PropertyType::Dunno(ref s) if s == "None" => true,
+                        mut typ => {
+                            let mut name = "".to_string();
+                            if let PropertyType::Dunno(s) = typ {
+                                name = s;
+                                println!("{}name: {}", std::iter::repeat(" ").take(depth as usize * 2 + 2).collect::<String>(), name);
+                                typ = try!(self.read_type());
+                            }
+                            self.parse_type(typ, true, depth+2).is_ok() && (len == 0 || self.position() < start_pos + len) && name != "EntitlementsSeen"
+                        }
                     }
-                    self.parse_type(typ, true, depth+2).is_ok() && (len == 0 || self.position() > start_pos + len)
                 } {}
+                println!("{}}}", std::iter::repeat(" ").take(depth as usize * 2).collect::<String>());
                 Ok(())
             },
             PropertyType::Str => {
@@ -156,7 +170,7 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
             },
             PropertyType::Object => {
                 if read_len {
-                    let len = try!(self.read_u64::<LittleEndian>());
+                    try!(self.read_u64::<LittleEndian>());
                 }
                 println!("{}: {}", t, try!(self.read_string()));
                 Ok(())
@@ -164,7 +178,7 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
             // quick fixes
             PropertyType::Int => {
                 if read_len {
-                    let len = try!(self.read_u64::<LittleEndian>());
+                    try!(self.read_u64::<LittleEndian>());
                 }
                 println!("{}: {}", t, try!(self.read_u32::<LittleEndian>()));
                 Ok(())
@@ -182,9 +196,7 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
     }
 
     fn read_head(&mut self) -> Result<()> {
-        let mut buf = Vec::new();
-        buf.resize(22, 0);
-        try!(self.read_exact(&mut buf));
+        let buf = self.take(22).bytes().map(|b| b.unwrap()).collect::<Vec<_>>();
         println!("{:?}", buf);
         let mut b2 = buf.clone();
         b2.resize(4, 0);
@@ -194,10 +206,7 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
 
     fn read_string(&mut self) -> Result<String> {
         let len = try!(self.read_u32::<LittleEndian>());
-        let mut buf = Vec::new();
-        buf.resize(len as usize, 0);
-        try!(self.read_exact(&mut buf));
-        //println!("{}: {:?}", len, buf);
+        let mut buf = self.take(len as u64).bytes().map(|b| b.unwrap()).collect::<Vec<_>>();
         assert_eq!(buf.pop().unwrap(), 0);
         Ok(String::from_utf8(buf).unwrap())
     }
@@ -209,10 +218,10 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
 
 fn main() {
     //let mut f = File::open("files/ChracterSlotSave.9.sav").unwrap();
-    let mut f = File::open("/home/morpheus/.config/Epic/Victory/Saved/SaveGames/ChracterSlotSave.9.sav").unwrap();
-    //let mut f = File::open("files/flai.sav").unwrap();
+    //let mut f = File::open("/home/morpheus/.config/Epic/Victory/Saved/SaveGames/ChracterSlotSave.9.sav").unwrap();
+    let mut f = File::open("files/flai.sav").unwrap();
     let mut buf = Vec::new();
-    f.read_to_end(&mut buf);
+    f.read_to_end(&mut buf).unwrap();
     let mut cur = Cursor::new(buf);
     cur.parse().unwrap();
 }
