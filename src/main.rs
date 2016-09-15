@@ -115,23 +115,7 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
         self.read_head().unwrap();
         debug!("{}", try!(self.read_string()));
         debug!("{}", try!(self.read_string()));
-        // CurrentCharacterSlot is only in the file, if it is non-zero.
-        // If it is in the file, we'll read it, otherwise we must reset the cursor's position.
-        let pos = self.position();
-        let s = try!(self.read_string());
-        let current_character_slot;
-        if s == "CurrentCharacterSlot" {
-            debug!("{}", s);
-            let slot = try!(self.parse_internal(0));
-            current_character_slot = Value::new("CurrentCharacterSlot".to_string(), slot);
-        } else {
-            debug!("CurrentCharacterSlot");
-            debug!("Int: 0");
-            current_character_slot = Value::new("CurrentCharacterSlot".to_string(), ReturnType::Int(0));
-            self.set_position(pos);
-        }
         let mut vec = Vec::new();
-        vec.push(current_character_slot);
         loop {
             let name = try!(self.read_string());
             if name == "None" {
