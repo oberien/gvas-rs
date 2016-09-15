@@ -132,6 +132,8 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
     }
 
     fn parse_type(&mut self, t: PropertyType, read_len: bool, depth: u8) -> Result<ReturnType> {
+        // TODO: rename read_len → in_array
+        // TODO: improve in_array-handling and add it for all types
         match t {
             PropertyType::Array => {
                 let len = try!(self.read_u64::<LittleEndian>());
@@ -156,13 +158,12 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
                 Ok(ReturnType::Array(res))
             },
             PropertyType::Struct => {
-                // TODO: use Option for len
                 let len;
                 if read_len {
-                    len = try!(self.read_u64::<LittleEndian>());
-                    custom_debug!(depth, "{}: {}", t, len);
+                    len = Some(try!(self.read_u64::<LittleEndian>()));
+                    custom_debug!(depth, "{}: {}", t, len.unwrap());
                 } else {
-                    len = 0;
+                    len = None;
                     custom_debug!(depth,"{}", t);
                 }
                 custom_debug!(depth, "{{");
@@ -189,7 +190,7 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
                     }
                     custom_debug!(depth, "name: {}", name);
                     let value = try!(self.parse_type(typ, true, depth+2));
-                    let cond = (len == 0 || self.position() < start_pos + len) && name != "EntitlementsSeen";
+                    let cond = (len.is_none() || self.position() < start_pos + len.unwrap()) && name != "EntitlementsSeen";
                     res.push(Value::new(name, value));
                     if !cond {
                         break;
