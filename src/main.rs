@@ -3,7 +3,6 @@ extern crate env_logger;
 extern crate byteorder;
 extern crate rustc_serialize;
 
-use std::fs::File;
 use std::io::{Read, Cursor, Result as Result};
 use std::str::FromStr;
 
@@ -306,11 +305,8 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
 
 fn main() {
     env_logger::init().unwrap();
-    //let mut f = File::open("files/ChracterSlotSave.9.sav").unwrap();
-    //let mut f = File::open("/home/morpheus/.config/Epic/Victory/Saved/SaveGames/ChracterSlotSave.9.sav").unwrap();
-    let mut f = File::open("files/flai.sav").unwrap();
     let mut buf = Vec::new();
-    f.read_to_end(&mut buf).unwrap();
+    std::io::stdin().read_to_end(&mut buf).unwrap();
     let mut cur = Cursor::new(buf);
     let res = cur.parse().unwrap();
     info!("{:?}", res);
