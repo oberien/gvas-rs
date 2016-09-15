@@ -72,7 +72,7 @@ impl Value {
 enum ReturnType {
     Bool(bool),
     Byte(u64),
-    Int(u32),
+    Int(i32),
     Float(f32),
     Str(String),
     LinearColor(Vec<u8>),
@@ -88,7 +88,7 @@ impl ToJson for ReturnType {
         match self {
             &ReturnType::Bool(b) => Json::Boolean(b),
             &ReturnType::Byte(b) => Json::U64(b),
-            &ReturnType::Int(i) => Json::U64(i as u64),
+            &ReturnType::Int(i) => Json::I64(i as i64),
             &ReturnType::Float(f) => Json::F64(f as f64),
             &ReturnType::Str(ref s) => Json::String(s.clone()),
             &ReturnType::LinearColor(ref v) => Json::Array(v.iter().cloned().map(|b| Json::U64(b as u64)).collect()),
@@ -258,7 +258,7 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
                 if read_len {
                     try!(self.read_u64::<LittleEndian>());
                 }
-                let i = try!(self.read_u32::<LittleEndian>());
+                let i = try!(self.read_i32::<LittleEndian>());
                 custom_debug!(depth, "{}: {}", t, i);
                 Ok(ReturnType::Int(i))
             },
