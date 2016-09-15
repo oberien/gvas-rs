@@ -1,10 +1,12 @@
 extern crate byteorder;
+extern crate rustc_serialize;
 
 use std::fs::File;
 use std::io::{Read, Cursor, Result as Result};
 use std::str::FromStr;
 
 use byteorder::{ReadBytesExt, LittleEndian};
+use rustc_serialize::json::{self, Json, ToJson};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PropertyType {
@@ -51,40 +53,94 @@ impl std::fmt::Display for PropertyType {
     }
 }
 
+#[derive(Debug, PartialEq)]
+struct Value(String, ReturnType);
+
+impl Value {
+    fn new(name: String, value: ReturnType) -> Value {
+        Value(name, value)
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum ReturnType {
+    Bool(bool),
+    Byte(u64),
+    Int(u32),
+    Float(f32),
+    Str(String),
+    LinearColor(Vec<u8>),
+    Array(Vec<ReturnType>),
+    Struct(Vec<Value>),
+    Object(String),
+    CharacterDNA((u64, u64)),
+    CharacterCustomization((u64, u64)),
+}
+
+impl ToJson for ReturnType {
+    fn to_json(&self) -> Json {
+        match self {
+            &ReturnType::Bool(b) => Json::Boolean(b),
+            &ReturnType::Byte(b) => Json::U64(b),
+            &ReturnType::Int(i) => Json::U64(i as u64),
+            &ReturnType::Float(f) => Json::F64(f as f64),
+            &ReturnType::Str(ref s) => Json::String(s.clone()),
+            &ReturnType::LinearColor(ref v) => Json::Array(v.iter().cloned().map(|b| Json::U64(b as u64)).collect()),
+            &ReturnType::Array(ref v) => Json::Array(v.iter().map(|e| e.to_json()).collect()),
+            &ReturnType::Struct(ref v) => Json::Object(v.iter().map(|v| (v.0.clone(), v.1.to_json())).collect()),
+            &ReturnType::Object(ref s) => Json::String(s.clone()),
+            &ReturnType::CharacterDNA((a,b)) => Json::Array(vec![Json::U64(a), Json::U64(b)]),
+            &ReturnType::CharacterCustomization((a,b)) => Json::Array(vec![Json::U64(a), Json::U64(b)]),
+        }
+    }
+}
+
 trait GVASRead {
-    fn parse(&mut self) -> Result<()>;
-    fn parse_internal(&mut self, depth: u8) -> Result<()>;
-    fn parse_type(&mut self, t: PropertyType, read_len: bool, depth: u8) -> Result<()>;
+    fn parse(&mut self) -> Result<ReturnType>;
+    fn parse_internal(&mut self, depth: u8) -> Result<ReturnType>;
+    fn parse_type(&mut self, t: PropertyType, read_len: bool, depth: u8) -> Result<ReturnType>;
     fn read_head(&mut self) -> Result<()>;
     fn read_string(&mut self) -> Result<String>;
     fn read_type(&mut self) -> Result<PropertyType>;
 }
 
 impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
-    fn parse(&mut self) -> Result<()> {
+    fn parse(&mut self) -> Result<ReturnType> {
         self.read_head().unwrap();
         println!("{}", try!(self.read_string()));
         println!("{}", try!(self.read_string()));
+        // CurrentCharacterSlot is only in the file, if it is non-zero.
+        // If it is in the file, we'll read it, otherwise we must reset the cursor's position.
+        let pos = self.position();
         let s = try!(self.read_string());
-        // CurrentCharacterSlot is only in the file, if it is non-zero
+        let current_character_slot;
         if s == "CurrentCharacterSlot" {
             println!("{}", s);
-            try!(self.parse_internal(0));
-            println!("{}", try!(self.read_string()));
+            let slot = try!(self.parse_internal(0));
+            current_character_slot = ReturnType::Struct(vec![Value::new("CurrentCharacterSlot".to_string(), slot)]);
         } else {
             println!("CurrentCharacterSlot");
             println!("Int: 0");
-            println!("{}", s);
+            current_character_slot = ReturnType::Struct(vec![Value::new("CurrentCharacterSlot".to_string(), ReturnType::Int(0))]);
+            self.set_position(pos);
         }
-        self.parse_internal(0)
+        let mut vec = Vec::new();
+        loop {
+            let name = try!(self.read_string());
+            if name == "None" {
+                break;
+            }
+            vec.push(Value::new(name, try!(self.parse_internal(0))));
+        }
+        Ok(ReturnType::Struct(vec))
     }
 
-    fn parse_internal(&mut self, depth: u8) -> Result<()> {
+    fn parse_internal(&mut self, depth: u8) -> Result<ReturnType> {
         let t = try!(self.read_type());
         self.parse_type(t, true, depth)
     }
 
-    fn parse_type(&mut self, t: PropertyType, read_len: bool, depth: u8) -> Result<()> {
+    fn parse_type(&mut self, t: PropertyType, read_len: bool, depth: u8) -> Result<ReturnType> {
         print!("{}", std::iter::repeat(" ").take((depth*2) as usize).collect::<String>());
         match t {
             PropertyType::Array => {
@@ -93,21 +149,22 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
                 let elements = try!(self.read_u32::<LittleEndian>());
                 println!("{}: {}, {}: {}", t, len, typ, elements);
                 println!("{}[", std::iter::repeat(" ").take(depth as usize*2).collect::<String>());
+                let mut res = Vec::new();
                 for _ in 0..elements {
-                    try!(self.parse_type(typ.clone(), false, depth+1));
+                    res.push(try!(self.parse_type(typ.clone(), false, depth+1)));
                 }
                 println!("{}]", std::iter::repeat(" ").take(depth as usize*2).collect::<String>());
+                // TODO: fix None-handling
                 // worst fix as they are using arrays with different types:
-                let mut name = try!(self.read_string());
-                while name != "None" {
-                    println!("{}{}", std::iter::repeat(" ").take(depth as usize*2).collect::<String>(), name);
-                    try!(self.parse_internal(depth));
-                    name = try!(self.read_string());
+                let pos = self.position();
+                let name = try!(self.read_string());
+                if name != "None" {
+                    self.set_position(pos);
                 }
-                assert_eq!(name, "None");
-                Ok(())
+                Ok(ReturnType::Array(res))
             },
             PropertyType::Struct => {
+                // TODO: use Option for len
                 let len;
                 if read_len {
                     len = try!(self.read_u64::<LittleEndian>());
@@ -118,6 +175,7 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
                 }
                 println!("{}{{", std::iter::repeat(" ").take(depth as usize * 2).collect::<String>());
                 let start_pos = self.position();
+                let mut res = Vec::new();
                 loop {
                     // Structs usually have <name> <type> <value>.
                     // For some reason, <type> is not given for CharacterDNA and CharacterCustomization.
@@ -138,68 +196,82 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
                         name = typ.to_string();
                     }
                     println!("{}name: {}", std::iter::repeat(" ").take(depth as usize * 2 + 2).collect::<String>(), name);
-                    if ! (self.parse_type(typ, true, depth+2).is_ok() && (len == 0 || self.position() < start_pos + len) && name != "EntitlementsSeen") {
+                    let value = try!(self.parse_type(typ, true, depth+2));
+                    let cond = (len == 0 || self.position() < start_pos + len) && name != "EntitlementsSeen";
+                    res.push(Value::new(name, value));
+                    if !cond {
                         break;
                     }
                 }
                 println!("{}}}", std::iter::repeat(" ").take(depth as usize * 2).collect::<String>());
-                Ok(())
+                Ok(ReturnType::Struct(res))
             },
             PropertyType::Str => {
                 let len = try!(self.read_u64::<LittleEndian>());
                 let buf = self.take(len).bytes().map(|b| b.unwrap()).collect::<Vec<_>>();
-                println!("{}: {:?}", t, try!(Cursor::new(buf).read_string()));
-                Ok(())
+                let s = try!(Cursor::new(buf).read_string());
+                println!("{}: {:?}", t, s);
+                Ok(ReturnType::Str(s))
             },
             PropertyType::Byte => {
                 let byte = try!(self.read_u64::<LittleEndian>());
                 println!("{}: {}", t, byte);
-                Ok(())
+                Ok(ReturnType::Byte(byte))
             },
             PropertyType::Bool => {
                 let len = try!(self.read_u64::<LittleEndian>());
                 assert_eq!(len, 0);
                 let b = try!(self.read_u8()) == 1;
                 println!("{}: {:?}", t, b);
-                Ok(())
+                Ok(ReturnType::Bool(b))
             },
             PropertyType::Float => {
                 let len = try!(self.read_u64::<LittleEndian>());
                 assert_eq!(len, 4);
                 let float = try!(self.read_f32::<LittleEndian>());
                 println!("{}: {:?}", t, float);
-                Ok(())
+                Ok(ReturnType::Float(float))
             },
             PropertyType::LinearColor => {
                 let len = try!(self.read_u64::<LittleEndian>());
                 assert_eq!(len, 0);
                 let buf = self.take(24).bytes().map(|b| b.unwrap()).collect::<Vec<_>>();
                 println!("{}: {:?}", t, buf);
-                Ok(())
+                Ok(ReturnType::LinearColor(buf))
             },
             PropertyType::Object => {
                 if read_len {
                     try!(self.read_u64::<LittleEndian>());
                 }
-                println!("{}: {}", t, try!(self.read_string()));
-                Ok(())
+                let obj = try!(self.read_string());
+                println!("{}: {}", t, obj);
+                Ok(ReturnType::Object(obj))
             },
             // quick fixes
             PropertyType::Int => {
                 if read_len {
                     try!(self.read_u64::<LittleEndian>());
                 }
-                println!("{}: {}", t, try!(self.read_u32::<LittleEndian>()));
-                Ok(())
+                let i = try!(self.read_u32::<LittleEndian>());
+                println!("{}: {}", t, i);
+                Ok(ReturnType::Int(i))
             },
             // I have no idea what I'm doing
-            PropertyType::CharacterDNA | PropertyType::CharacterCustomization => {
-                println!("{}: {}, {}", t, try!(self.read_u64::<LittleEndian>()), try!(self.read_u64::<LittleEndian>()));
-                Ok(())
+            PropertyType::CharacterDNA => {
+                let a = try!(self.read_u64::<LittleEndian>());
+                let b = try!(self.read_u64::<LittleEndian>());
+                println!("{}: {}, {}", t, a, b);
+                Ok(ReturnType::CharacterDNA((a, b)))
+            },
+             PropertyType::CharacterCustomization => {
+                let a = try!(self.read_u64::<LittleEndian>());
+                let b = try!(self.read_u64::<LittleEndian>());
+                println!("{}: {}, {}", t, a, b);
+                Ok(ReturnType::CharacterCustomization((a, b)))
             },
             PropertyType::Dunno(s) => {
                 println!("{}", s);
-                Ok(())
+                Ok(ReturnType::Str(s))
             }
         }
     }
@@ -232,5 +304,8 @@ fn main() {
     let mut buf = Vec::new();
     f.read_to_end(&mut buf).unwrap();
     let mut cur = Cursor::new(buf);
-    cur.parse().unwrap();
+    let res = cur.parse().unwrap();
+    println!("{:?}", res);
+    let encoded = res.to_json().to_string();
+    println!("{}", encoded);
 }

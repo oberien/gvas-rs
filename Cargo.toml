@@ -5,3 +5,4 @@ authors = ["Blackhole16 <jaro.fietz@gmx.de>"]
 
 [dependencies]
 byteorder = "0.5"
+rustc-serialize = "0.3"
