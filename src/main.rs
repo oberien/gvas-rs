@@ -104,7 +104,7 @@ impl ToJson for ReturnType {
 trait GVASRead {
     fn parse(&mut self) -> Result<ReturnType>;
     fn parse_internal(&mut self, depth: u8) -> Result<ReturnType>;
-    fn parse_type(&mut self, t: PropertyType, read_len: bool, depth: u8) -> Result<ReturnType>;
+    fn parse_type(&mut self, t: PropertyType, in_array: bool, depth: u8) -> Result<ReturnType>;
     fn read_head(&mut self) -> Result<()>;
     fn read_string(&mut self) -> Result<String>;
     fn read_type(&mut self) -> Result<PropertyType>;
@@ -128,11 +128,11 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
 
     fn parse_internal(&mut self, depth: u8) -> Result<ReturnType> {
         let t = try!(self.read_type());
-        self.parse_type(t, true, depth)
+        self.parse_type(t, false, depth)
     }
 
-    fn parse_type(&mut self, t: PropertyType, read_len: bool, depth: u8) -> Result<ReturnType> {
-        // TODO: rename read_len → in_array
+    fn parse_type(&mut self, t: PropertyType, in_array: bool, depth: u8) -> Result<ReturnType> {
+        // TODO: rearrange match arms with same order as in enum definition
         // TODO: improve in_array-handling and add it for all types
         match t {
             PropertyType::Array => {
@@ -143,7 +143,7 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
                 custom_debug!(depth, "[");
                 let mut res = Vec::new();
                 for _ in 0..elements {
-                    res.push(try!(self.parse_type(typ.clone(), false, depth+1)));
+                    res.push(try!(self.parse_type(typ.clone(), true, depth+1)));
                 }
                 custom_debug!(depth, "]");
                 // Usually arrays are finished with `None`.
@@ -159,12 +159,12 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
             },
             PropertyType::Struct => {
                 let len;
-                if read_len {
-                    len = Some(try!(self.read_u64::<LittleEndian>()));
-                    custom_debug!(depth, "{}: {}", t, len.unwrap());
-                } else {
+                if in_array {
                     len = None;
                     custom_debug!(depth,"{}", t);
+                } else {
+                    len = Some(try!(self.read_u64::<LittleEndian>()));
+                    custom_debug!(depth, "{}: {}", t, len.unwrap());
                 }
                 custom_debug!(depth, "{{");
                 let start_pos = self.position();
@@ -189,7 +189,16 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
                         name = typ.to_string();
                     }
                     custom_debug!(depth, "name: {}", name);
-                    let value = try!(self.parse_type(typ, true, depth+2));
+                    let value = try!(self.parse_type(typ, false, depth+2));
+                    // Usually structs do have a length parameter in bytes, which can
+                    // be used for identifying it's end.
+                    // Also they seem to end on None (TODO: confirm this).
+                    // This length parameter won't be supplied if the struct is inside
+                    // an array, which means we can't find out when one struct ends
+                    // and the next one starts.
+                    //
+                    // The only case a struct is inside an array is the outermost struct for
+                    // `CharacterSlots`, whiches last element is `EntitlementsSeen`.
                     let cond = (len.is_none() || self.position() < start_pos + len.unwrap()) && name != "EntitlementsSeen";
                     res.push(Value::new(name, value));
                     if !cond {
@@ -233,7 +242,7 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
                 Ok(ReturnType::LinearColor(buf))
             },
             PropertyType::Object => {
-                if read_len {
+                if !in_array {
                     try!(self.read_u64::<LittleEndian>());
                 }
                 let obj = try!(self.read_string());
@@ -242,7 +251,7 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
             },
             // quick fixes
             PropertyType::Int => {
-                if read_len {
+                if !in_array {
                     try!(self.read_u64::<LittleEndian>());
                 }
                 let i = try!(self.read_i32::<LittleEndian>());
