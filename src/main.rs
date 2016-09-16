@@ -132,8 +132,55 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
     }
 
     fn parse_type(&mut self, t: PropertyType, in_array: bool, depth: u8) -> Result<ReturnType> {
-        // TODO: rearrange match arms with same order as in enum definition
         match t {
+            PropertyType::Bool => {
+                if !in_array {
+                    let len = try!(self.read_u64::<LittleEndian>());
+                    assert_eq!(len, 0);
+                }
+                let b = try!(self.read_u8()) == 1;
+                custom_debug!(depth, "{}: {:?}", t, b);
+                Ok(ReturnType::Bool(b))
+            },
+            PropertyType::Byte => {
+                let byte = try!(self.read_u64::<LittleEndian>());
+                custom_debug!(depth, "{}: {}", t, byte);
+                Ok(ReturnType::Byte(byte))
+            },
+            PropertyType::Int => {
+                if !in_array {
+                    try!(self.read_u64::<LittleEndian>());
+                }
+                let i = try!(self.read_i32::<LittleEndian>());
+                custom_debug!(depth, "{}: {}", t, i);
+                Ok(ReturnType::Int(i))
+            },
+            PropertyType::Float => {
+                if !in_array {
+                    let len = try!(self.read_u64::<LittleEndian>());
+                    assert_eq!(len, 4);
+                }
+                let float = try!(self.read_f32::<LittleEndian>());
+                custom_debug!(depth, "{}: {:?}", t, float);
+                Ok(ReturnType::Float(float))
+            },
+            PropertyType::Str => {
+                if !in_array {
+                    try!(self.read_u64::<LittleEndian>());
+                }
+                let s = try!(self.read_string());
+                custom_debug!(depth, "{}: {:?}", t, s);
+                Ok(ReturnType::Str(s))
+            },
+            PropertyType::LinearColor => {
+                if !in_array {
+                    let len = try!(self.read_u64::<LittleEndian>());
+                    assert_eq!(len, 0);
+                }
+                let buf = self.take(24).bytes().map(|b| b.unwrap()).collect::<Vec<_>>();
+                custom_debug!(depth, "{}: {:?}", t, buf);
+                Ok(ReturnType::LinearColor(buf))
+            },
             PropertyType::Array => {
                 if in_array {
                     custom_debug!(depth, "{}", t);
@@ -212,46 +259,6 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
                 custom_debug!(depth, "}}");
                 Ok(ReturnType::Struct(res))
             },
-            PropertyType::Str => {
-                if !in_array {
-                    try!(self.read_u64::<LittleEndian>());
-                }
-                let s = try!(self.read_string());
-                custom_debug!(depth, "{}: {:?}", t, s);
-                Ok(ReturnType::Str(s))
-            },
-            PropertyType::Byte => {
-                let byte = try!(self.read_u64::<LittleEndian>());
-                custom_debug!(depth, "{}: {}", t, byte);
-                Ok(ReturnType::Byte(byte))
-            },
-            PropertyType::Bool => {
-                if !in_array {
-                    let len = try!(self.read_u64::<LittleEndian>());
-                    assert_eq!(len, 0);
-                }
-                let b = try!(self.read_u8()) == 1;
-                custom_debug!(depth, "{}: {:?}", t, b);
-                Ok(ReturnType::Bool(b))
-            },
-            PropertyType::Float => {
-                if !in_array {
-                    let len = try!(self.read_u64::<LittleEndian>());
-                    assert_eq!(len, 4);
-                }
-                let float = try!(self.read_f32::<LittleEndian>());
-                custom_debug!(depth, "{}: {:?}", t, float);
-                Ok(ReturnType::Float(float))
-            },
-            PropertyType::LinearColor => {
-                if !in_array {
-                    let len = try!(self.read_u64::<LittleEndian>());
-                    assert_eq!(len, 0);
-                }
-                let buf = self.take(24).bytes().map(|b| b.unwrap()).collect::<Vec<_>>();
-                custom_debug!(depth, "{}: {:?}", t, buf);
-                Ok(ReturnType::LinearColor(buf))
-            },
             PropertyType::Object => {
                 if !in_array {
                     try!(self.read_u64::<LittleEndian>());
@@ -259,15 +266,6 @@ impl<R: AsRef<[u8]>> GVASRead for Cursor<R> {
                 let obj = try!(self.read_string());
                 custom_debug!(depth, "{}: {}", t, obj);
                 Ok(ReturnType::Object(obj))
-            },
-            // quick fixes
-            PropertyType::Int => {
-                if !in_array {
-                    try!(self.read_u64::<LittleEndian>());
-                }
-                let i = try!(self.read_i32::<LittleEndian>());
-                custom_debug!(depth, "{}: {}", t, i);
-                Ok(ReturnType::Int(i))
             },
             // I have no idea what I'm doing
             PropertyType::CharacterDNA => {
