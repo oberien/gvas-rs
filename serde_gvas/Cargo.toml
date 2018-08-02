@@ -1,0 +1,12 @@
+[package]
+name = "serde_gvas"
+version = "0.1.0"
+authors = ["oberien <jaro.fietz@gmx.de>"]
+
+[dependencies]
+serde = "1"
+byteorder = "1"
+log = "0.4"
+encoding_rs = "0.8"
+void = "1"
+failure = "0.1"
